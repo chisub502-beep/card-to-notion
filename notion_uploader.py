@@ -23,7 +23,7 @@ def create_entry(item: dict, notion_key: str) -> dict:
         "Notion-Version": NOTION_API_VERSION,
     }
 
-    # Notion 페이지 properties 구성
+    #  페이지 properties 구성
     properties = {
         "가맹점명": {"title": [{"text": {"content": str(item.get("가맹점명", ""))}}]},
         "합계금액": {"number": int(item.get("합계금액", 0))},
@@ -35,6 +35,11 @@ def create_entry(item: dict, notion_key: str) -> dict:
     # 거래일 (YYYY-MM-DD)
     if item.get("거래일"):
         properties["거래일"] = {"date": {"start": item["거래일"]}}
+         # 카드사 추가
+            if item.get("카드사"):
+        properties["카드사"] = {
+            "select": {"name": item["카드사"]}
+        }
 
     # Select 타입 필드들
     select_fields = ["귀속월", "증빙구분", "계정과목", "매입세액공제", "사용자"]
@@ -50,7 +55,7 @@ def create_entry(item: dict, notion_key: str) -> dict:
         }
 
     payload = {
-        "parent": {"database_id": NOTION_DATABASE_ID},
+        "parent": {"database_id": _DATABASE_ID},
         "properties": properties,
     }
 
