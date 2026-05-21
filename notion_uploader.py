@@ -1,5 +1,7 @@
 """
 Notion API 연동: 파싱된 거래내역을 부가세 장부 DB에 기입
+- 카드사 컬럼 지원 추가
+- 중복 체크 포함
 """
 import requests
 from config import NOTION_DATABASE_ID, NOTION_API_VERSION
@@ -23,23 +25,20 @@ def create_entry(item: dict, notion_key: str) -> dict:
         "Notion-Version": NOTION_API_VERSION,
     }
 
-    #  페이지 properties 구성
+    # Notion 페이지 properties 구성
     properties = {
-        "가맹점명": {"title": [{"text": {"content": str(item.get("가맹점명", ""))}}]},
+        "가맹점명": {
+            "title": [{"text": {"content": str(item.get("가맹점명", ""))}}]
+        },
         "합계금액": {"number": int(item.get("합계금액", 0))},
         "공급가액": {"number": int(item.get("공급가액", 0))},
         "부가세": {"number": int(item.get("부가세", 0))},
-        "분류상태": {"select": {"name": "AI자동분류"}},
+        "분류상태": {"select": {"name": item.get("분류상태", "AI자동분류")}},
     }
 
     # 거래일 (YYYY-MM-DD)
     if item.get("거래일"):
         properties["거래일"] = {"date": {"start": item["거래일"]}}
-         # 카드사 추가
-            if item.get("카드사"):
-        properties["카드사"] = {
-            "select": {"name": item["카드사"]}
-        }
 
     # Select 타입 필드들
     select_fields = ["귀속월", "증빙구분", "계정과목", "매입세액공제", "사용자"]
@@ -48,14 +47,18 @@ def create_entry(item: dict, notion_key: str) -> dict:
         if val and str(val).strip():
             properties[field] = {"select": {"name": str(val).strip()}}
 
+    # ★ 카드사 (추가됨)
+    if item.get("카드사") and str(item["카드사"]).strip():
+        properties["카드사"] = {"select": {"name": str(item["카드사"]).strip()}}
+
     # 적요 (있으면 추가)
     if item.get("적요"):
         properties["적요"] = {
-            "rich_text": [{"text": {"content": str(item["적요"])}}]
+            "rich_text": [{"text": {"content": str(item["적요"])[:2000]}}]
         }
 
     payload = {
-        "parent": {"database_id": _DATABASE_ID},
+        "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": properties,
     }
 
@@ -72,7 +75,8 @@ def create_entry(item: dict, notion_key: str) -> dict:
             return {
                 "success": False,
                 "가맹점명": item.get("가맹점명", ""),
-                "error": f"HTTP {resp.status_code}: {error_body.get('message', resp.text[:200])}",
+                "error": f"HTTP {resp.status_code}: "
+                f"{error_body.get('message', resp.text[:200])}",
             }
     except Exception as e:
         return {
@@ -82,40 +86,10 @@ def create_entry(item: dict, notion_key: str) -> dict:
         }
 
 
-def upload_all(items: list[dict], notion_key: str) -> dict:
-    """
-    거래내역 전체를 Notion DB에 업로드한다.
-
-    Returns:
-        {"success": int, "fail": int, "errors": list[dict]}
-    """
-    success_count = 0
-    fail_count = 0
-    errors = []
-
-    for item in items:
-        result = create_entry(item, notion_key)
-        if result["success"]:
-            success_count += 1
-        else:
-            fail_count += 1
-            errors.append(result)
-
-    return {
-        "success": success_count,
-        "fail": fail_count,
-        "total": len(items),
-        "errors": errors,
-    }
-
-
 def check_duplicate(item: dict, notion_key: str) -> bool:
     """
-    거래일 + 가맹점명 + 합계금액 조합으로 중복 여부를 확인한다.
-    (Notion API filter 사용)
-
-    Returns:
-        True = 이미 존재 (중복), False = 신규
+    같은 거래일 + 가맹점명 + 합계금액 조합이 이미 DB에 있는지 확인.
+    있으면 True (중복), 없으면 False.
     """
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
@@ -124,46 +98,55 @@ def check_duplicate(item: dict, notion_key: str) -> bool:
         "Notion-Version": NOTION_API_VERSION,
     }
 
-    payload = {
-        "filter": {
-            "and": [
-                {
-                    "property": "거래일",
-                    "date": {"equals": item.get("거래일", "")},
-                },
-                {
-                    "property": "합계금액",
-                    "number": {"equals": int(item.get("합계금액", 0))},
-                },
-                {
-                    "property": "가맹점명",
-                    "title": {"equals": str(item.get("가맹점명", ""))},
-                },
-                {
-                    "property": "사용자",
-                    "select": {"equals": str(item.get("사용자", ""))},
-                },
-            ]
-        },
-        "page_size": 1,
+    # 필터: 거래일 + 합계금액으로 중복 체크
+    filter_conditions = {
+        "and": [
+            {
+                "property": "합계금액",
+                "number": {"equals": int(item.get("합계금액", 0))},
+            },
+        ]
     }
+
+    # 거래일이 있으면 필터에 추가
+    if item.get("거래일"):
+        filter_conditions["and"].append(
+            {
+                "property": "거래일",
+                "date": {"equals": item["거래일"]},
+            }
+        )
+
+    payload = {"filter": filter_conditions, "page_size": 5}
 
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=15)
         if resp.status_code == 200:
-            data = resp.json()
-            return len(data.get("results", [])) > 0
+            results = resp.json().get("results", [])
+            # 가맹점명까지 매칭 확인
+            for page in results:
+                title_prop = page.get("properties", {}).get("가맹점명", {})
+                title_arr = title_prop.get("title", [])
+                if title_arr:
+                    existing_name = title_arr[0].get("text", {}).get("content", "")
+                    if existing_name == str(item.get("가맹점명", "")):
+                        return True  # 중복
         return False
     except Exception:
-        return False
+        return False  # 오류 시 중복 아닌 것으로 처리 (저장 진행)
 
 
-def upload_with_dedup(items: list[dict], notion_key: str) -> dict:
+def upload_all(items: list, notion_key: str) -> dict:
     """
-    중복 체크 후 신규 건만 업로드한다.
+    거래내역 전체를 Notion DB에 업로드한다.
+    중복 체크 후 새 건만 추가.
+
+    Args:
+        items: 거래내역 딕셔너리 리스트
+        notion_key: Notion Integration 토큰
 
     Returns:
-        {"success": int, "fail": int, "skipped": int, "errors": list}
+        {"success": int, "fail": int, "skipped": int, "total": int, "errors": list}
     """
     success_count = 0
     fail_count = 0

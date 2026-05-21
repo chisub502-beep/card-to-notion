@@ -6,8 +6,9 @@ import streamlit as st
 import pandas as pd
 from pdf_parser import parse_statement
 from verifier import verify_statement, cross_check
-from notion_uploader import upload_with_dedup
+from notion_uploader import upload_all
 from config import USERS
+
 
 # ─── 페이지 설정 ───
 st.set_page_config(
@@ -15,6 +16,7 @@ st.set_page_config(
     page_icon="📒",
     layout="wide",
 )
+
 
 # ─── API 키 로드 (Streamlit Cloud: secrets.toml / 로컬: 환경변수) ───
 def get_api_keys():
@@ -27,7 +29,9 @@ def get_api_keys():
         notion_key = os.environ.get("NOTION_API_KEY", "")
     return anthropic_key, notion_key
 
+
 ANTHROPIC_KEY, NOTION_KEY = get_api_keys()
+
 
 # ─── 비밀번호 잠금 ───
 def check_password():
@@ -49,198 +53,156 @@ def check_password():
                 st.error("비밀번호가 틀렸습니다.")
         st.stop()
 
+
 check_password()
+
 
 # ─── 메인 UI ───
 st.title("📒 카드명세서 → 부가세 장부")
 st.caption("카드사 PDF 명세서를 업로드하면 AI가 분석하여 Notion 장부에 자동 입력합니다.")
 
-# ─── 사이드바: 사용자 선택 ───
+
+# ─── 사이드바: 사용자 선택 + PDF 비밀번호 ───
 with st.sidebar:
     st.header("⚙️ 설정")
     user = st.selectbox("사용자 선택", USERS)
     pdf_password = st.text_input(
-    "PDF 비밀번호 (카드사 명세서 암호)", type="password",
-    help="보통 생년월일 6자리 (예: 900101)"
+        "PDF 비밀번호",
+        type="password",
+        help="카드사 명세서에 걸린 암호 (보통 생년월일 6자리, 예: 900101)",
     )
-
     st.divider()
     st.markdown("**사용법**")
     st.markdown(
         "1. 사용자 선택\n"
-        "2. 카드 명세서 PDF 업로드\n"
-        "3. AI 분석 결과 확인\n"
-        "4. 필요시 수정 후 저장"
+        "2. PDF 비밀번호 입력 (있는 경우)\n"
+        "3. 카드 명세서 PDF 업로드\n"
+        "4. AI 분석 결과 확인\n"
+        "5. 필요시 수정 후 저장"
     )
     st.divider()
-    st.caption("AI 분류는 참고용입니다.\n계정과목과 매입세액공제는\n반드시 확인 후 저장하세요.")
+    st.caption(
+        "AI 분류는 참고용입니다.\n"
+        "계정과목과 매입세액공제는\n"
+        "반드시 확인 후 저장하세요."
+    )
+
 
 # ─── PDF 업로드 ───
-uploaded = st.file_uploader(
-    "카드 명세서 PDF를 올려주세요",
-    type=["pdf"],
-    help="카드사에서 발송한 이용대금 명세서 PDF 파일",
-)
+uploaded = st.file_uploader("카드 명세서 PDF 업로드", type="pdf")
 
-if uploaded is not None:
+if uploaded:
     pdf_bytes = uploaded.read()
-    file_size_mb = len(pdf_bytes) / (1024 * 1024)
-    st.info(f"📄 **{uploaded.name}** ({file_size_mb:.1f} MB) — 사용자: **{user}**")
 
-    # ─── 분석 시작 ───
     if st.button("🔍 AI 분석 시작", type="primary", use_container_width=True):
-
-        # API 키 확인
-        if not ANTHROPIC_KEY or not NOTION_KEY:
-            st.error("API 키가 설정되지 않았습니다. secrets.toml 또는 환경변수를 확인하세요.")
+        # ── 1차: AI 파싱 ──
+        try:
+            with st.spinner("AI가 명세서를 읽고 있습니다... (페이지가 많으면 시간이 걸릴 수 있어요)"):
+                result = parse_statement(
+                    pdf_bytes,
+                    user_name=user,
+                    api_key=ANTHROPIC_KEY,
+                    password=pdf_password,
+                )
+                items = result["items"]
+                card_company = result["card_company"]
+        except ValueError as e:
+            st.error(f"⚠️ {str(e)}")
+            st.stop()
+        except Exception as e:
+            st.error(f"파싱 실패: {e}")
             st.stop()
 
-        # ── 1차: AI 파싱 ──
-        with st.status("AI가 명세서를 분석하고 있습니다...", expanded=True) as status:
-            st.write("📖 1차: PDF에서 거래내역 추출 중...")
-          try:
-    result = parse_statement(pdf_bytes, user, ANTHROPIC_KEY, password=pdf_password)
-    items = result["items"]
-    card_company = result["card_company"]
+        if not items:
+            st.warning("추출된 거래내역이 없습니다. PDF를 확인해주세요.")
+            st.stop()
 
-    if card_company:
-        st.success(f"📇 감지된 카드사: **{card_company}**")
+        # 카드사 감지 결과
+        if card_company:
+            st.success(f"📇 감지된 카드사: **{card_company}**")
 
-    st.info(f"✅ 총 {len(items)}건 추출 완료")
+        st.info(f"✅ 총 **{len(items)}건** 추출 완료")
 
-except ValueError as e:
-    st.error(f"⚠️ {str(e)}")
-    st.stop()
-except Exception as e:
-    st.error(f"파싱 실패: {e}")
-    st.stop()
-
-            # ── 2차: 독립 검증 ──
-            st.write("🔎 2차: 검증용 요약 정보 추출 중...")
-            try:
-                summary = verify_statement(pdf_bytes, ANTHROPIC_KEY)
+        # ── 2차: 검증 (비밀번호 해제된 PDF 재사용) ──
+        try:
+            with st.spinner("검증 중..."):
+                # 비밀번호 해제된 PDF로 검증
+                from pdf_parser import decrypt_pdf
+                decrypted_pdf = decrypt_pdf(pdf_bytes, pdf_password) if pdf_password else pdf_bytes
+                summary = verify_statement(decrypted_pdf, ANTHROPIC_KEY)
                 check = cross_check(items, summary)
-                st.write(f"→ 검증 완료")
-            except Exception as e:
-                st.warning(f"검증 추출 실패 (파싱 결과는 유효): {e}")
-                check = None
 
-            status.update(label="분석 완료!", state="complete", expanded=False)
-
-        # ── 검증 결과 표시 ──
-        if check:
-            st.subheader("📊 검증 결과")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("추출 건수", f"{check['추출건수']}건",
-                          delta=None if check["건수_일치"]
-                          else f"명세서: {check['명세서건수']}건",
-                          delta_color="off")
-            with col2:
-                st.metric("추출 합계", f"{check['추출합계']:,}원",
-                          delta=None if check["금액_일치"]
-                          else f"차이: {check['금액차이']:+,}원",
-                          delta_color="off")
-            with col3:
-                st.metric("이용 기간", check.get("기간", "-"))
-
-            if check["검증통과"]:
-                st.success("✅ 검증 통과 — 금액과 건수가 일치합니다.")
+            if check["금액_일치"] and check["건수_일치"]:
+                st.success(
+                    f"✅ 검증 통과 — {check['추출합계']:,}원 / {len(items)}건"
+                )
             else:
                 st.warning(
-                    "⚠️ 검증 불일치가 있습니다. 아래 테이블을 꼼꼼히 확인해주세요.\n\n"
-                    + check["메시지"]
+                    f"⚠️ 불일치 — 추출: {check['추출합계']:,}원, "
+                    f"명세서: {check['명세서총액']:,}원 "
+                    f"(차이: {check['차이']:+,}원)"
                 )
+        except Exception as e:
+            st.warning(f"검증 스킵 (오류: {e}). 파싱 결과는 아래에서 직접 확인하세요.")
 
         # ── 결과 테이블 (수정 가능) ──
         st.subheader("📋 추출 결과")
-        st.caption("셀을 클릭하여 직접 수정할 수 있습니다. 수정 후 아래 저장 버튼을 누르세요.")
-
         df = pd.DataFrame(items)
 
         # 컬럼 순서 정리
-        col_order = [
+        desired_cols = [
             "거래일", "가맹점명", "합계금액", "공급가액", "부가세",
-            "계정과목", "매입세액공제", "증빙구분", "귀속월", "사용자",
+            "계정과목", "매입세액공제", "증빙구분", "사용자",
+            "카드사", "귀속월", "분류상태", "적요",
         ]
-        existing_cols = [c for c in col_order if c in df.columns]
-        extra_cols = [c for c in df.columns if c not in col_order]
-        df = df[existing_cols + extra_cols]
-
-        # 계정과목, 매입세액공제 드롭다운 설정
-        column_config = {
-            "합계금액": st.column_config.NumberColumn("합계금액", format="%d"),
-            "공급가액": st.column_config.NumberColumn("공급가액", format="%d"),
-            "부가세": st.column_config.NumberColumn("부가세", format="%d"),
-            "계정과목": st.column_config.SelectboxColumn(
-                "계정과목",
-                options=[
-                    "소모품비", "복리후생비", "접대비", "차량유지비", "통신비",
-                    "지급수수료", "광고선전비", "여비교통비", "도서인쇄비",
-                    "교육훈련비", "구분필요",
-                ],
-            ),
-            "매입세액공제": st.column_config.SelectboxColumn(
-                "매입세액공제",
-                options=["공제", "불공제", "확인필요"],
-            ),
-            "증빙구분": st.column_config.SelectboxColumn(
-                "증빙구분",
-                options=["사업자카드", "세금계산서", "현금영수증", "간이영수증"],
-            ),
-            "사용자": st.column_config.SelectboxColumn(
-                "사용자",
-                options=USERS,
-            ),
-        }
+        cols = [c for c in desired_cols if c in df.columns]
+        remaining = [c for c in df.columns if c not in cols]
+        df = df[cols + remaining]
 
         edited_df = st.data_editor(
             df,
-            column_config=column_config,
             use_container_width=True,
-            num_rows="dynamic",  # 행 추가/삭제 가능
-            key="result_editor",
+            num_rows="dynamic",
         )
 
-        # session_state에 저장 (버튼 클릭 시 사용)
+        # 합계 표시
+        total = edited_df["합계금액"].sum() if "합계금액" in edited_df.columns else 0
+        st.metric("합계금액", f"{int(total):,}원")
+
+        # ── session_state에 저장 ──
         st.session_state["edited_items"] = edited_df.to_dict("records")
+        st.session_state["card_company"] = card_company
 
-# ─── Notion 저장 버튼 ──
-if "edited_items" in st.session_state and st.session_state["edited_items"]:
+
+# ─── Notion 저장 버튼 ───
+if "edited_items" in st.session_state:
     st.divider()
-
-    col_left, col_right = st.columns([3, 1])
-    with col_left:
-        dedup = st.checkbox("🔄 중복 건 자동 건너뛰기", value=True,
-                            help="같은 날짜 + 가맹점 + 금액이 이미 장부에 있으면 건너뜁니다")
-    with col_right:
-        save_btn = st.button(
-            "💾 Notion에 저장",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if save_btn:
+    if st.button(
+        "✅ Notion에 저장",
+        type="primary",
+        use_container_width=True,
+    ):
         items_to_save = st.session_state["edited_items"]
 
-        with st.spinner(f"{len(items_to_save)}건을 Notion에 저장하는 중..."):
-            result = upload_with_dedup(items_to_save, NOTION_KEY)
+        progress_bar = st.progress(0, text="저장 중...")
+        with st.spinner("Notion에 저장하는 중..."):
+            results = upload_all(items_to_save, NOTION_KEY)
+
+        progress_bar.progress(100, text="완료!")
 
         # 결과 표시
-        if result["fail"] == 0:
-            msg = f"✅ 저장 완료: **{result['success']}건** 성공"
-            if result.get("skipped", 0) > 0:
-                msg += f" / {result['skipped']}건 중복 건너뜀"
-            st.success(msg)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("성공", f"{results['success']}건")
+        col2.metric("실패", f"{results['fail']}건")
+        col3.metric("중복 스킵", f"{results['skipped']}건")
+
+        if results["errors"]:
+            with st.expander("❌ 오류 상세"):
+                for err in results["errors"]:
+                    st.text(f"- {err.get('가맹점명', '?')}: {err.get('error', '?')}")
+
+        if results["success"] > 0:
             st.balloons()
-            # 저장 완료 후 상태 초기화
-            del st.session_state["edited_items"]
-        else:
-            st.warning(
-                f"⚠️ {result['success']}건 성공 / {result['fail']}건 실패"
-                + (f" / {result.get('skipped', 0)}건 중복 건너뜀" if result.get("skipped") else "")
-            )
-            if result["errors"]:
-                with st.expander("실패 상세 보기"):
-                    for err in result["errors"]:
-                        st.error(f"**{err['가맹점명']}**: {err['error']}")
+
+        # 저장 완료 후 세션 정리
+        del st.session_state["edited_items"]
