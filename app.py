@@ -59,6 +59,11 @@ st.caption("카드사 PDF 명세서를 업로드하면 AI가 분석하여 Notion
 with st.sidebar:
     st.header("⚙️ 설정")
     user = st.selectbox("사용자 선택", USERS)
+        pdf_password = st.text_input(
+        "PDF 비밀번호 (카드사 명세서 암호)", type="password",
+        help="보통 생년월일 6자리 (예: 900101)"
+    )
+
     st.divider()
     st.markdown("**사용법**")
     st.markdown(
@@ -93,12 +98,22 @@ if uploaded is not None:
         # ── 1차: AI 파싱 ──
         with st.status("AI가 명세서를 분석하고 있습니다...", expanded=True) as status:
             st.write("📖 1차: PDF에서 거래내역 추출 중...")
-            try:
-                items = parse_statement(pdf_bytes, user, ANTHROPIC_KEY)
-                st.write(f"→ {len(items)}건 추출 완료")
-            except Exception as e:
-                st.error(f"파싱 실패: {e}")
-                st.stop()
+          try:
+    result = parse_statement(pdf_bytes, user, ANTHROPIC_KEY, password=pdf_password)
+    items = result["items"]
+    card_company = result["card_company"]
+
+    if card_company:
+        st.success(f"📇 감지된 카드사: **{card_company}**")
+
+    st.info(f"✅ 총 {len(items)}건 추출 완료")
+
+except ValueError as e:
+    st.error(f"⚠️ {str(e)}")
+    st.stop()
+except Exception as e:
+    st.error(f"파싱 실패: {e}")
+    st.stop()
 
             # ── 2차: 독립 검증 ──
             st.write("🔎 2차: 검증용 요약 정보 추출 중...")
