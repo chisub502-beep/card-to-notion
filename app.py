@@ -59,9 +59,9 @@ st.caption("카드사 PDF 명세서를 업로드하면 AI가 분석하여 Notion
 with st.sidebar:
     st.header("⚙️ 설정")
     user = st.selectbox("사용자 선택", USERS)
-        pdf_password = st.text_input(
-        "PDF 비밀번호 (카드사 명세서 암호)", type="password",
-        help="보통 생년월일 6자리 (예: 900101)"
+    pdf_password = st.text_input(
+    "PDF 비밀번호 (카드사 명세서 암호)", type="password",
+    help="보통 생년월일 6자리 (예: 900101)"
     )
 
     st.divider()
