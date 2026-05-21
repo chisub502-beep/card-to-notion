@@ -37,7 +37,7 @@ def verify_statement(pdf_bytes: bytes, api_key: str) -> dict:
         pages_to_check.add(len(doc) - 1)  # 마지막 페이지
 
     content = []
-    zoom = 200 / 72
+    zoom = 300 / 72
     matrix = fitz.Matrix(zoom, zoom)
 
     for page_num in sorted(pages_to_check):
