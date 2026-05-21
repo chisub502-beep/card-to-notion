@@ -17,7 +17,7 @@ NOTION_API_VERSION = "2022-06-28"
 USERS = ["한치섭", "한정주", "한치흥"]
 
 # ─── Claude 모델 ───
-CLAUDE_MODEL = "claude-haiku-4-5-20250414"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 # ─── 계정과목 분류 기준 (AI 프롬프트에 포함) ───
 ACCOUNT_RULES = """
