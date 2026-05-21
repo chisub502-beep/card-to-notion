@@ -191,10 +191,9 @@ if "edited_items" in st.session_state:
         progress_bar.progress(100, text="완료!")
 
         # 결과 표시
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         col1.metric("성공", f"{results['success']}건")
         col2.metric("실패", f"{results['fail']}건")
-        col3.metric("중복 스킵", f"{results['skipped']}건")
 
         if results["errors"]:
             with st.expander("❌ 오류 상세"):
