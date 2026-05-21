@@ -153,7 +153,7 @@ if uploaded:
         desired_cols = [
             "거래일", "가맹점명", "합계금액", "공급가액", "부가세",
             "계정과목", "매입세액공제", "증빙구분", "사용자",
-            "카드사", "귀속월", "분류상태", "적요",
+            "카드사", "카드번호뒷자리", "귀속월", "분류상태", "적요",
         ]
         cols = [c for c in desired_cols if c in df.columns]
         remaining = [c for c in df.columns if c not in cols]

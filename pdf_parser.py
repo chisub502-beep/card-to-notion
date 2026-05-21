@@ -179,6 +179,7 @@ def call_claude_vision(
             "증빙구분": "사업자카드",
             "계정과목": "차량유지비",
             "매입세액공제": "공제",
+            "카드번호뒷자리": "1234",
             "사용자": user_name,
         }
 
@@ -190,6 +191,9 @@ def call_claude_vision(
                     f"{extra_info}\n\n"
                     f"각 거래는 아래 형식의 JSON 객체로:\n"
                     f"{json.dumps(example, ensure_ascii=False)}\n\n"
+                    f"추가 지시:\n"
+                    f"- 카드번호뒷자리: 명세서에 표시된 카드번호 끝 4자리 숫자 (예: 1234). 보이지 않으면 빈 문자열.\n"
+                    f"- 카드사: 명세서 발행 카드사명 (예: 삼성카드, 현대카드, 신한카드 등). 보이지 않으면 빈 문자열.\n"
                     f"해당 페이지의 모든 거래를 빠짐없이 추출하세요."
                 ),
             }
@@ -270,10 +274,19 @@ def parse_statement(
             if field not in item:
                 item[field] = "" if field != "합계금액" else 0
 
-        # 사용자/카드사 강제 세팅
+        # 사용자 강제 세팅
         item["사용자"] = user_name
+
+        # 카드사: 자동감지 > AI추출 > 빈값 순으로 우선
         if card_company:
             item["카드사"] = card_company
+        elif not item.get("카드사"):
+            item["카드사"] = ""
+
+        # 카드번호뒷자리: 숫자 4자리만 남기기
+        raw_card_num = str(item.get("카드번호뒷자리", "")).strip()
+        digits = "".join(c for c in raw_card_num if c.isdigit())
+        item["카드번호뒷자리"] = digits[-4:] if len(digits) >= 4 else digits
 
         # 분류상태 세팅
         item["분류상태"] = "AI자동분류"

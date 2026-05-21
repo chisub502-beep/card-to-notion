@@ -51,6 +51,12 @@ def create_entry(item: dict, notion_key: str) -> dict:
     if item.get("카드사") and str(item["카드사"]).strip():
         properties["카드사"] = {"select": {"name": str(item["카드사"]).strip()}}
 
+    # ★ 카드번호뒷자리 (추가됨)
+    if item.get("카드번호뒷자리") and str(item["카드번호뒷자리"]).strip():
+        properties["카드번호뒷자리"] = {
+            "rich_text": [{"text": {"content": str(item["카드번호뒷자리"]).strip()[:4]}}]
+        }
+
     # 적요 (있으면 추가)
     if item.get("적요"):
         properties["적요"] = {
